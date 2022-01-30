@@ -38,6 +38,18 @@ struct Node {
   int val;       // when kind is ND_NUM
 };
 
+// Input program
+char *user_input;
+// current token
+Token *token;
+
+Node *expr();
+Node *mul();
+Node *primary();
+bool consume(char op);
+void expect(char op);
+int expect_number();
+
 Node *new_node(NodeKind kind, Node *lhs, Node *rhs) {
   Node *node = calloc(1, sizeof(Node));
   node->kind = kind;
@@ -78,7 +90,7 @@ Node *mul() {
   for (;;) {
     if (consume('*'))
       node = new_node(ND_MUL, node, primary());
-    else if (consume('-'))
+    else if (consume('/'))
       node = new_node(ND_DIV, node, primary());
     else
       return node;
@@ -94,7 +106,7 @@ Node *primary() {
   // '(' expr ') should follow.
   if (consume('(')) {
     Node *node = expr();
-    expext(')');
+    expect(')');
     return node;
   }
 
@@ -132,11 +144,6 @@ void gen(Node *node) {
 
   printf("  push rax\n");
 }
-
-// Input program
-char *user_input;
-// current token
-Token *token;
 
 // Reports and error and exit.
 void error(char *fmt, ...) {
@@ -209,7 +216,7 @@ Token *tokenize() {
       ++p;
       continue;
     }
-    if (*p == '+' || *p == '-') {
+    if (strchr("+-*/()", *p)) {
       cur = new_token(TK_RESERVED, cur, p++);
       continue;
     }
@@ -218,7 +225,7 @@ Token *tokenize() {
       cur->val = strtol(p, &p, 10); // 123abc to 123 and p points at 'a'
       continue;
     }
-    error_at(p, "expected a number");
+    error_at(p, "invalid token");
   }
 
   new_token(TK_EOF, cur, p);
@@ -231,29 +238,21 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Tokenize and parse codes
   user_input = argv[1];
   token = tokenize(user_input);
+  Node *node = expr();
 
   // First parts of assembly
   printf(".intel_syntax noprefix\n");
   printf(".globl main\n");
   printf("main:\n");
 
-  // The first of statements has to be a number.
-  // so check it and print it.
-  printf("  mov rax, %d\n", expect_number());
+  // Trace abstract tree recursively and generate code
+  gen(node);
 
-  // "Consuming + <number>" or "- <number>", generate Assembly
-  while (!at_eof()) {
-    if (consume('+')) {
-      printf("  add rax, %d\n", expect_number());
-      continue;
-    }
-
-    expect('-');
-    printf("  sub rax, %d\n", expect_number());
-  }
-
+  // return the last result
+  printf("  pop rax\n");
   printf("  ret\n");
   return 0;
 }
