@@ -46,11 +46,12 @@ Token *token;
 Node *expr();
 Node *mul();
 Node *primary();
+Node *unary();
 bool consume(char op);
 void expect(char op);
 int expect_number();
 
-Node *new_node(NodeKind kind, Node *lhs, Node *rhs) {
+Node *new_binary(NodeKind kind, Node *lhs, Node *rhs) {
   Node *node = calloc(1, sizeof(Node));
   node->kind = kind;
   node->lhs = lhs;
@@ -73,9 +74,9 @@ Node *expr() {
   Node *node = mul();
   for (;;) {
     if (consume('+'))
-      node = new_node(ND_ADD, node, mul());
+      node = new_binary(ND_ADD, node, mul());
     else if (consume('-'))
-      node = new_node(ND_SUB, node, mul());
+      node = new_binary(ND_SUB, node, mul());
     else
       return node;
   }
@@ -84,14 +85,14 @@ Node *expr() {
 Node *mul() {
   /*
     Generate rule:
-      mul = primary ("*" primary | "/" primary)*
+      mul = unary ("*" unary | "/" unary)*
   */
-  Node *node = primary();
+  Node *node = unary();
   for (;;) {
     if (consume('*'))
-      node = new_node(ND_MUL, node, primary());
+      node = new_binary(ND_MUL, node, unary());
     else if (consume('/'))
-      node = new_node(ND_DIV, node, primary());
+      node = new_binary(ND_DIV, node, unary());
     else
       return node;
   }
@@ -109,9 +110,17 @@ Node *primary() {
     expect(')');
     return node;
   }
-
   // otherwise it should be a number
   return new_node_num(expect_number());
+}
+
+Node *unary() {
+  // unary   = ("+" | "-")? primary
+  if (consume('+'))
+    return unary();
+  if (consume('-'))
+    return new_binary(ND_SUB, new_node_num(0), unary());
+  return primary();
 }
 
 void gen(Node *node) {
