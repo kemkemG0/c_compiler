@@ -18,6 +18,7 @@ struct Token {
   Token *next;    // next coming token
   int val;        // when kind isTK_NUM, use this
   char *str;      // token string
+  int len;        // length of token
 };
 
 // Kind of nodes of abstract syntax tree
@@ -26,6 +27,10 @@ typedef enum {
   ND_SUB, //-
   ND_MUL, //*
   ND_DIV, // /
+  ND_EQ,  // ==
+  ND_NE,  // !=
+  ND_LT,  // <
+  ND_LE,  // <=
   ND_NUM, // integer
 } NodeKind;
 
@@ -44,11 +49,14 @@ char *user_input;
 Token *token;
 
 Node *expr();
+Node *equality();
+Node *relational();
+Node *add();
 Node *mul();
 Node *primary();
 Node *unary();
-bool consume(char op);
-void expect(char op);
+bool consume(char *op);
+void expect(char *op);
 int expect_number();
 
 Node *new_binary(NodeKind kind, Node *lhs, Node *rhs) {
@@ -66,16 +74,47 @@ Node *new_node_num(int val) {
   return node;
 }
 
-Node *expr() {
-  /*
-    Generate rule:
-      expr = mul ("+" mul | "-" mul)*
-  */
-  Node *node = mul();
+// expr = equality
+Node *expr() { return equality(); }
+
+// equality = relational ("==" relational | "!=" relational)*
+Node *equality() {
+  Node *node = relational();
   for (;;) {
-    if (consume('+'))
+    if (consume("=="))
+      node = new_binary(ND_EQ, node, relational());
+    else if (consume("!="))
+      node = new_binary(ND_NE, node, relational());
+    else
+      return node;
+  }
+}
+
+// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+Node *relational() {
+  Node *node = add();
+  for (;;) {
+    if (consume("<"))
+      node = new_binary(ND_LT, node, add());
+    else if (consume("<="))
+      node = new_binary(ND_LE, node, add());
+    else if (consume(">"))
+      node = new_binary(ND_LT, add(), node);
+    else if (consume(">="))
+      node = new_binary(ND_LE, add(), node);
+    else
+      return node;
+  }
+}
+
+// add = mul ("+" mul | "-" mul)*
+Node *add() {
+  Node *node = mul();
+
+  for (;;) {
+    if (consume("+"))
       node = new_binary(ND_ADD, node, mul());
-    else if (consume('-'))
+    else if (consume("-"))
       node = new_binary(ND_SUB, node, mul());
     else
       return node;
@@ -89,9 +128,9 @@ Node *mul() {
   */
   Node *node = unary();
   for (;;) {
-    if (consume('*'))
+    if (consume("*"))
       node = new_binary(ND_MUL, node, unary());
-    else if (consume('/'))
+    else if (consume("/"))
       node = new_binary(ND_DIV, node, unary());
     else
       return node;
@@ -105,9 +144,9 @@ Node *primary() {
   */
   // if the next token is '(',
   // '(' expr ') should follow.
-  if (consume('(')) {
+  if (consume("(")) {
     Node *node = expr();
-    expect(')');
+    expect(")");
     return node;
   }
   // otherwise it should be a number
@@ -116,9 +155,9 @@ Node *primary() {
 
 Node *unary() {
   // unary   = ("+" | "-")? primary
-  if (consume('+'))
+  if (consume("+"))
     return unary();
-  if (consume('-'))
+  if (consume("-"))
     return new_binary(ND_SUB, new_node_num(0), unary());
   return primary();
 }
@@ -148,6 +187,26 @@ void gen(Node *node) {
   case ND_DIV:
     printf("  cqo\n");
     printf("  idiv rdi\n");
+    break;
+  case ND_EQ:
+    printf("  cmp rax, rdi\n");
+    printf("  sete al\n");
+    printf("  movzb rax, al\n");
+    break;
+  case ND_NE:
+    printf("  cmp rax, rdi\n");
+    printf("  setne al\n");
+    printf("  movzb rax, al\n");
+    break;
+  case ND_LT:
+    printf("  cmp rax, rdi\n");
+    printf("  setl al\n");
+    printf("  movzb rax, al\n");
+    break;
+  case ND_LE:
+    printf("  cmp rax, rdi\n");
+    printf("  setle al\n");
+    printf("  movzb rax, al\n");
     break;
   }
 
@@ -179,15 +238,17 @@ void error_at(char *err_loc, char *fmt, ...) {
 
 // if the next token is the operand which you expect,
 // increment token and return true. Otherwise return false.
-bool consume(char op) {
-  if (token->kind != TK_RESERVED || token->str[0] != op)
+bool consume(char *op) {
+  if (token->kind != TK_RESERVED || strlen(op) != token->len ||
+      memcmp(token->str, op, token->len))
     return false;
   token = token->next;
   return true;
 }
 
-void expect(char op) {
-  if (token->kind != TK_RESERVED || token->str[0] != op)
+void expect(char *op) {
+  if (token->kind != TK_RESERVED || strlen(op) != token->len ||
+      memcmp(token->str, op, token->len))
     error_at(token->str, "expected '%c'", op);
   token = token->next;
 }
@@ -203,14 +264,17 @@ int expect_number() {
 bool at_eof() { return token->kind == TK_EOF; }
 
 // create new token and connect to current one
-Token *new_token(TokenKind kind, Token *cur, char *str) {
+Token *new_token(TokenKind kind, Token *cur, char *str, int len) {
   // Allocate and zero-initialize array
   Token *tok = calloc(1, sizeof(Token));
   tok->kind = kind;
   tok->str = str;
+  tok->len = len;
   cur->next = tok;
   return tok;
 }
+
+bool startswith(char *p, char *q) { return memcmp(p, q, strlen(q)) == 0; }
 
 // input cstring'p' to token
 Token *tokenize() {
@@ -225,19 +289,29 @@ Token *tokenize() {
       ++p;
       continue;
     }
-    if (strchr("+-*/()", *p)) {
-      cur = new_token(TK_RESERVED, cur, p++);
+
+    if (startswith(p, "==") || startswith(p, "!=") || startswith(p, "<=") ||
+        startswith(p, ">=")) {
+      cur = new_token(TK_RESERVED, cur, p, 2);
+      p += 2;
+      continue;
+    }
+    // ()*()
+    if (strchr("+-*/()<>", *p)) {
+      cur = new_token(TK_RESERVED, cur, p++, 1);
       continue;
     }
     if (isdigit(*p)) {
-      cur = new_token(TK_NUM, cur, p);
-      cur->val = strtol(p, &p, 10); // 123abc to 123 and p points at 'a'
+      cur = new_token(TK_NUM, cur, p, 0);
+      char *q = p;
+      cur->val = strtol(p, &p, 10);
+      cur->len = p - q;
       continue;
     }
     error_at(p, "invalid token");
   }
 
-  new_token(TK_EOF, cur, p);
+  new_token(TK_EOF, cur, p, 0);
   return head.next;
 }
 
