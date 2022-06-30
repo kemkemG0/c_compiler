@@ -1,0 +1,8 @@
+version: '2'
+services:
+  ubuntu:
+    platform: linux/amd64
+    build: .
+    volumes:
+      - .:/workdir
+    tty: true
